@@ -1,0 +1,2 @@
+bmpedit.exe: bmpedit.c bmp.c vga.c mouse.c keyb.c
+	tcc -mh bmpedit.c bmp.c vga.c mouse.c keyb.c
