@@ -54,3 +54,41 @@ void setup_palette(byte *unshaded_colors) {
         }
     }
 }
+
+void get_palette(byte *dest) {
+    union REGS regs;
+    regs.x.ax = 0x1017;
+    regs.x.bx = 0;
+    regs.x.cx = 0x100;
+    regs.x.dx = (int) dest;
+    int86(0x10, &regs, &regs);
+}
+
+void submit_palette(byte *raw_palette) {
+    int i;
+    outp(0x03c8, 0);
+    for(i = 0; i < 256; i++) {
+        outp(0x03c9, *raw_palette);
+        raw_palette++;
+        outp(0x03c9, *raw_palette);
+        raw_palette++;
+        outp(0x03c9, *raw_palette);
+        raw_palette++;
+    }
+}
+
+void fade_out() {
+    int i, k;
+    raw_color grabbed_palette[256];
+    get_palette(grabbed_palette);
+    for(i = 0; i < 16; i ++) {
+        for(k = 0; k < 256; k++) {
+            if(grabbed_palette[k].r > 3) grabbed_palette[k].r -= 4;
+            if(grabbed_palette[k].g > 3) grabbed_palette[k].g -= 4;
+            if(grabbed_palette[k].b > 3) grabbed_palette[k].b -= 4;
+        }
+        submit_palette(grabbed_palette);
+        wait_retrace();
+    }
+    memset(VGA, 0, 64000L);
+}

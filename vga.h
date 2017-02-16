@@ -14,6 +14,7 @@
 #define NUM_COLORS 256
 
 #define pixel(x,y) graphic_buffer[(y<<8)+(y<<6)+x]
+#define bufpixel(buf,x,y) buf[(y<<8)+(y<<6)+x]
 
 typedef unsigned char byte;
 
@@ -33,4 +34,9 @@ void set_mode(byte mode);
 
 void setup_palette(byte *unshaded_colors);
 
+void get_palette(byte *dest);
+
+void submit_palette(byte *raw_palette);
+
+void fade_out();
 #endif

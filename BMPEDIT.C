@@ -12,19 +12,28 @@
 #define overpixel(x,y) VGA[(y<<8)+(y<<6)+x]
 #define QUIT_KEY 1
 
-#define BUTTON_COUNT 6
+#define BUTTON_COUNT 8
 #define SAVE_BUTTON_INDEX 0
 #define CHFRAME_BUTTON_INDEX 1
 #define NEXTFRAME_BUTTON_INDEX 2
 #define PREVFRAME_BUTTON_INDEX 3
 #define COPY_BUTTON_INDEX 4
 #define PASTE_BUTTON_INDEX 5
+#define PENCIL_BUTTON_INDEX 6
+#define FILL_BUTTON_INDEX 7
 #define true 1
 #define false 0
 
 #define MAX_FRAMES 64
 
+#define FILL_QUEUE_SIZE 4096
+
+#define MODE_PENCIL 0
+#define MODE_FILL 1
+
 typedef int bool;
+
+int tool_mode = 0;
 
 int frame_width = 64;
 int frame_height = 64;
@@ -41,6 +50,13 @@ typedef struct interface_button
 } interface_button;
 
 /*byte *overlay_buffer;*/
+
+typedef struct coords {
+    int x, y;
+} coords;
+
+int fill_queue_head = 0, fill_queue_tail = 0;
+coords fill_queue[FILL_QUEUE_SIZE];
 
 byte *font;
 byte* copybuf;
@@ -240,28 +256,6 @@ void paste_frame() {
     show_frame(current_frame);
 }
 
-void get_palette(byte *dest) {
-    union REGS regs;
-    regs.x.ax = 0x1017;
-    regs.x.bx = 0;
-    regs.x.cx = 0x100;
-    regs.x.dx = (int) dest;
-    int86(0x10, &regs, &regs);
-}
-
-void submit_palette(byte *raw_palette) {
-    int i;
-    outp(0x03c8, 0);
-    for(i = 0; i < 256; i++) {
-        outp(0x03c9, *raw_palette);
-        raw_palette++;
-        outp(0x03c9, *raw_palette);
-        raw_palette++;
-        outp(0x03c9, *raw_palette);
-        raw_palette++;
-    }
-}
-
 void change_frame_count(int new_frame_count) {
     int i;
     if(new_frame_count == 0) return;
@@ -321,6 +315,96 @@ void save_pressed() {
     }
 }
 
+void select_pencil() {
+    tool_mode = MODE_PENCIL;
+}
+
+void select_fill() {
+    tool_mode = MODE_FILL;
+}
+
+void reset_fill_queue() {
+    fill_queue_head = 0;
+    fill_queue_tail = 0;
+}
+
+void enqueue_fill(coords v) {
+    if(v.x < 0 || v.x >= frame_width) return;
+    if(v.y < 0 || v.y >= frame_height) return;
+    fill_queue[fill_queue_tail] = v;
+    fill_queue_tail = (fill_queue_tail+1) % FILL_QUEUE_SIZE;
+}
+
+coords dequeue_fill() {
+    coords head = fill_queue[fill_queue_head];
+    fill_queue_head = (fill_queue_head+1) % FILL_QUEUE_SIZE;
+    return head;
+}
+
+bool coords_in_frame(coords v) {
+    if(v.x < 0 || v.x >= frame_width) return false;
+    if(v.y < 0 || v.y >= frame_height) return false;
+    return true;
+}
+
+byte* pointer_for_coords(coords v) {
+    return &((art_frames[current_frame])[((frame_height - v.y - 1) * frame_width) + v.x]);
+}
+
+coords get_north(coords v) {
+    v.y--;
+    return v;
+}
+
+coords get_south(coords v) {
+    v.y++;
+    return v;
+}
+
+coords get_east(coords v) {
+    v.x++;
+    return v;
+}
+
+coords get_west(coords v) {
+    v.x --;
+    return v;
+}
+
+void flood_fill(int x, int y, byte old_color, byte new_color) {
+    coords point;
+    if(old_color == new_color) return;
+    point.x = x;
+    point.y = y;
+    if(*(pointer_for_coords(point)) != old_color) return;
+    reset_fill_queue();
+    enqueue_fill(point);
+    *(pointer_for_coords(point)) = new_color;
+    while(fill_queue_head != fill_queue_tail) {
+        coords N, S, E, W;
+        point = dequeue_fill();
+        W = get_west(point);
+        E = get_east(point);
+        N = get_north(point);
+        S = get_south(point);
+        if(coords_in_frame(W) && (*(pointer_for_coords(W)) == old_color)) {
+            enqueue_fill(W);
+            *(pointer_for_coords(W)) = new_color;
+        }
+        if(coords_in_frame(E) && (*(pointer_for_coords(E)) == old_color)) {
+            enqueue_fill(E);
+            *(pointer_for_coords(E)) = new_color;
+        }
+        if(coords_in_frame(N) && (*(pointer_for_coords(N)) == old_color)) {
+            enqueue_fill(N);
+            *(pointer_for_coords(N)) = new_color;
+        }
+        if(coords_in_frame(S) && (*(pointer_for_coords(S)) == old_color)) {
+            enqueue_fill(S);
+            *(pointer_for_coords(S)) = new_color;
+        }
+    }
+}
 
 void main(int argc, char** argv) {
     int keystates = 0;
@@ -329,7 +413,6 @@ void main(int argc, char** argv) {
     
     byte current_color = 14;
     interface_button iface_buttons[BUTTON_COUNT];
-    raw_color grabbed_palette[256];
 
     int keymap[8] = {
         1,
@@ -389,12 +472,30 @@ void main(int argc, char** argv) {
     iface_buttons[COPY_BUTTON_INDEX].handler = copy_frame;
 
     iface_buttons[PASTE_BUTTON_INDEX].text = "PASTE";
-    iface_buttons[PASTE_BUTTON_INDEX].top = 176;
-    iface_buttons[PASTE_BUTTON_INDEX].left = 176;
+    iface_buttons[PASTE_BUTTON_INDEX].top = 188;
+    iface_buttons[PASTE_BUTTON_INDEX].left = 128;
     iface_buttons[PASTE_BUTTON_INDEX].width = 40;
     iface_buttons[PASTE_BUTTON_INDEX].height = 8;
     iface_buttons[PASTE_BUTTON_INDEX].pressed = false;
     iface_buttons[PASTE_BUTTON_INDEX].handler = paste_frame;
+
+    iface_buttons[PENCIL_BUTTON_INDEX].text = "PENCIL";
+    iface_buttons[PENCIL_BUTTON_INDEX].top = 176;
+    iface_buttons[PENCIL_BUTTON_INDEX].left = 224;
+    iface_buttons[PENCIL_BUTTON_INDEX].width = 48;
+    iface_buttons[PENCIL_BUTTON_INDEX].height = 8;
+    iface_buttons[PENCIL_BUTTON_INDEX].pressed = false;
+    iface_buttons[PENCIL_BUTTON_INDEX].handler = select_pencil;
+
+    iface_buttons[FILL_BUTTON_INDEX].text = "FILL";
+    iface_buttons[FILL_BUTTON_INDEX].top = 188;
+    iface_buttons[FILL_BUTTON_INDEX].left = 224;
+    iface_buttons[FILL_BUTTON_INDEX].width = 32;
+    iface_buttons[FILL_BUTTON_INDEX].height = 8;
+    iface_buttons[FILL_BUTTON_INDEX].pressed = false;
+    iface_buttons[FILL_BUTTON_INDEX].handler = select_fill;
+
+
 
     /*overlay_buffer = malloc(64000L);*/
 
@@ -464,11 +565,17 @@ void main(int argc, char** argv) {
             if(point_in_palette_area(cursorX, cursorY)) {
                 current_color = pixel(cursorX, cursorY);
             } else if(point_in_draw_area(cursorX, cursorY)) {
-                (art_frames[current_frame])[((frame_height - frameY - 1) * frame_width) + frameX] = current_color;
-                /*show_frame(current_frame);*/
-                /*pixel(cursorX, cursorY) = current_color;*/
-                pixel(miniX, miniY) = current_color;
-                rect(graphic_buffer, boxX, boxY, 2, 2, current_color);
+                if(tool_mode == MODE_PENCIL) {
+                    (art_frames[current_frame])[((frame_height - frameY - 1) * frame_width) + frameX] = current_color;
+                    /*show_frame(current_frame);*/
+                    /*pixel(cursorX, cursorY) = current_color;*/
+                    pixel(miniX, miniY) = current_color;
+                    rect(graphic_buffer, boxX, boxY, 2, 2, current_color);
+                } else if((tool_mode == MODE_FILL) && (!(prev_buttons & 1))) {
+                    byte old_color = (art_frames[current_frame])[((frame_height - frameY - 1) * frame_width) + frameX];
+                    flood_fill(frameX, frameY, old_color, current_color);
+                    show_frame(current_frame);
+                }
                 
             } else if(!(prev_buttons & 1)) {
                 for(i = 0; i < BUTTON_COUNT; i++) {
@@ -482,7 +589,7 @@ void main(int argc, char** argv) {
         }
 
         if(point_in_draw_area(cursorX, cursorY)) {
-            sprintf(coords_text, "%d,%d", cursorX, cursorY);
+            sprintf(coords_text, "%d,%d", frameX, frameY);
         }
 
         if(keystates & 2) {
@@ -507,17 +614,7 @@ void main(int argc, char** argv) {
         prev_buttons = buttons;
     }
 
-    get_palette(grabbed_palette);
-    for(i = 0; i < 16; i ++) {
-        for(k = 0; k < 256; k++) {
-            if(grabbed_palette[k].r > 3) grabbed_palette[k].r -= 4;
-            if(grabbed_palette[k].g > 3) grabbed_palette[k].g -= 4;
-            if(grabbed_palette[k].b > 3) grabbed_palette[k].b -= 4;
-        }
-        submit_palette(grabbed_palette);
-        wait_retrace();
-    }
-    memset(VGA, 0, 64000L);
+    fade_out();
     wait_retrace();
 
     set_mode(VGA_TEXT_MODE);
