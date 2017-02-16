@@ -18,7 +18,7 @@ void cursor_pos(int* x, int* y, int* buttons) {
 	union REGS regs;
 	regs.x.ax = 3;
 	int86(0x33, &regs, &regs);
-	*x = regs.x.cx;
+	*x = regs.x.cx >> 1;
 	*y = regs.x.dx;
 	*buttons = regs.x.bx;
 }

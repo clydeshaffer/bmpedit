@@ -10,27 +10,44 @@
 #define timesWidth(x) ((x<<8)+(x<<6))
 
 #define overpixel(x,y) VGA[(y<<8)+(y<<6)+x]
-
 #define QUIT_KEY 1
 
-#define BUTTON_COUNT 1
+#define BUTTON_COUNT 6
 #define SAVE_BUTTON_INDEX 0
+#define CHFRAME_BUTTON_INDEX 1
+#define NEXTFRAME_BUTTON_INDEX 2
+#define PREVFRAME_BUTTON_INDEX 3
+#define COPY_BUTTON_INDEX 4
+#define PASTE_BUTTON_INDEX 5
 #define true 1
 #define false 0
 
+#define MAX_FRAMES 64
+
 typedef int bool;
 
+int frame_width = 64;
+int frame_height = 64;
+
+char coords_text[16];
+char frames_text[16];
 
 typedef struct interface_button
 {
     char* text;
     int top, left, width, height;
     bool pressed;
+    void (*handler) ();
 } interface_button;
 
 /*byte *overlay_buffer;*/
 
 byte *font;
+byte* copybuf;
+int frame_count = 1;
+int current_frame = 0;
+byte** art_frames;
+char* current_file = NULL;
 
 void rect(byte* target, int x, int y, int width, int height, byte color) {
     int i, addr;
@@ -143,27 +160,35 @@ void load_art(char* filename) {
 
     if(artbuf == NULL) return;
 
-    for(i = 0; i < 64; i++) {
+    frame_count = header.height / header.width;
+    frame_width = header.width;
+    frame_height = header.width;
+
+    for(i = 0; i < frame_count; i++) {
+        art_frames[i] = artbuf + (sizeof(byte) * frame_width * frame_height * i);
+    }
+
+    /*for(i = 0; i < 64; i++) {
         memcpy(graphic_buffer + (320 * (i + 136)), artbuf+((63 - i)*64), 64);
     }
 
     for(i = 0; i < 4096; i++) {
         rect(graphic_buffer, ((i % 64) << 1) + 128, (126 - ((i / 64) << 1)) + 16, 2, 2, artbuf[i]);
-    }
-
-    free(artbuf);
+    }*/
 }
 
 void save_art(char* filename) {
     union REGS regs;
-    byte artbuf[8192];
+    byte* artbuf;
     palette_color palette_table[256];
     bmp_head header;
     raw_color raw_palette[256];
-    int i;
+    int i, rows;
+
+    rows = frame_count * frame_height;
+    artbuf = malloc(sizeof(byte) * frame_width * rows);
 
     memset(raw_palette, 0, 256 * 3);
-    memset(artbuf, 0, 8192);
 
     regs.x.ax = 0x1017;
     regs.x.bx = 0;
@@ -172,8 +197,8 @@ void save_art(char* filename) {
 
     int86(0x10, &regs, &regs);
 
-    for(i = 0; i < 64; i ++) {
-        memcpy(artbuf+((63 - i)*64), graphic_buffer + (320 * (i + 136)), 64);
+    for(i = 0; i < frame_count; i++) {
+        memcpy(artbuf + (i * frame_width * frame_height), art_frames[i], frame_width * frame_height);
     }
 
     for(i = 0; i < 256; i++) {
@@ -183,9 +208,36 @@ void save_art(char* filename) {
         palette_table[i].blue = raw_palette[i].b << 2;
     }
 
-    header = make_bmp_head(64, 64);
+
+    header = make_bmp_head(frame_width, rows);
     save_bmp(&header, palette_table, artbuf, filename);
 
+}
+
+void show_frame(int frame_num) {
+    int i;
+
+    rect(graphic_buffer, 128, 16, 128, 128, 0);
+    rect(graphic_buffer, 0, 136, 64, 64, 0);
+
+    for(i = 0; i < frame_height; i++) {
+        memcpy(graphic_buffer + (320 * (i + 136)), art_frames[frame_num]+((63 - i)*64), 64);
+    }
+
+    for(i = 0; i < frame_width * frame_height; i++) {
+        rect(graphic_buffer, ((i % frame_width) << 1) + 128, (126 - ((i / frame_width) << 1)) + 16, 2, 2, (art_frames[frame_num])[i]);
+    }
+
+    sprintf(frames_text, "%d/%d", current_frame+1, frame_count);
+}
+
+void copy_frame() {
+    memcpy(copybuf, art_frames[current_frame], frame_width * frame_height);
+}
+
+void paste_frame() {
+    memcpy(art_frames[current_frame], copybuf, frame_width * frame_height);
+    show_frame(current_frame);
 }
 
 void get_palette(byte *dest) {
@@ -210,13 +262,75 @@ void submit_palette(byte *raw_palette) {
     }
 }
 
+void change_frame_count(int new_frame_count) {
+    int i;
+    if(new_frame_count == 0) return;
+    if(new_frame_count > MAX_FRAMES) new_frame_count = MAX_FRAMES;
+    if(new_frame_count > frame_count) {
+        for(i = frame_count; i < new_frame_count; i++) {
+            if(art_frames[i] == NULL) {
+                art_frames[i] = malloc(sizeof(byte) * frame_width * frame_height);
+                memset(art_frames[i], 0, sizeof(byte) * frame_width * frame_height);
+            }
+        }
+        frame_count = new_frame_count;
+    } else {
+        frame_count = new_frame_count;
+    }
+    sprintf(frames_text, "%d/%d", current_frame+1, frame_count);
+}
+
+void next_frame() {
+    current_frame = (current_frame+1) % frame_count;
+    show_frame(current_frame);
+}
+
+void prev_frame() {
+    if(current_frame == 0) {
+        current_frame = frame_count - 1;
+    } else {
+        current_frame--;
+    }
+
+    show_frame(current_frame);
+}
+
+void ch_frame() {
+    int newframes;
+    deinit_keyboard();
+    printf("How many frames?\n");
+    scanf("%d", &newframes);
+    init_keyboard();
+    change_frame_count(newframes);
+}
+
+void save_pressed() {
+    if(current_file) {
+        save_art(current_file);
+        printf("SAVED\r");
+    } else {
+        show_buffer();
+        draw_text(VGA, "TYPE FILENAME", 4, 84);
+        current_file = malloc(32);
+        deinit_keyboard();
+        scanf("%16s", current_file);
+        init_keyboard();
+        save_art(current_file);
+        rect(graphic_buffer, 128, 4, 192, 8, 26);
+        draw_text(graphic_buffer, current_file, 128,4);
+    }
+}
+
+
 void main(int argc, char** argv) {
     int keystates = 0;
     unsigned i, k;
     int cursorX = 0, cursorY = 0, buttons = 0, prev_buttons = 0;
-    char* current_file = NULL;
     char* save_text = "SAVE";
-    char coords_text[16];
+    char* chframes_text = "SET FRAMES";
+    char* next_text = "+";
+    char* prev_text = "-";
+    
     byte current_color = 14;
     interface_button iface_buttons[BUTTON_COUNT];
     raw_color grabbed_palette[256];
@@ -232,6 +346,11 @@ void main(int argc, char** argv) {
         28
     };
 
+    art_frames = malloc(sizeof(byte*) * MAX_FRAMES);
+    copybuf = malloc(sizeof(byte*) * frame_width * frame_height);
+    for(i=0;i<MAX_FRAMES;i++) {
+        art_frames[i] = NULL;
+    }
 
     iface_buttons[SAVE_BUTTON_INDEX].text = save_text;
     iface_buttons[SAVE_BUTTON_INDEX].top = 32;
@@ -239,6 +358,47 @@ void main(int argc, char** argv) {
     iface_buttons[SAVE_BUTTON_INDEX].width = 32;
     iface_buttons[SAVE_BUTTON_INDEX].height = 8;
     iface_buttons[SAVE_BUTTON_INDEX].pressed = false;
+    iface_buttons[SAVE_BUTTON_INDEX].handler = save_pressed;
+
+    iface_buttons[CHFRAME_BUTTON_INDEX].text = chframes_text;
+    iface_buttons[CHFRAME_BUTTON_INDEX].top = 100;
+    iface_buttons[CHFRAME_BUTTON_INDEX].left = 4;
+    iface_buttons[CHFRAME_BUTTON_INDEX].width = 80;
+    iface_buttons[CHFRAME_BUTTON_INDEX].height = 8;
+    iface_buttons[CHFRAME_BUTTON_INDEX].pressed = false;
+    iface_buttons[CHFRAME_BUTTON_INDEX].handler = ch_frame;
+
+    iface_buttons[PREVFRAME_BUTTON_INDEX].text = prev_text;
+    iface_buttons[PREVFRAME_BUTTON_INDEX].top = 112;
+    iface_buttons[PREVFRAME_BUTTON_INDEX].left = 4;
+    iface_buttons[PREVFRAME_BUTTON_INDEX].width = 8;
+    iface_buttons[PREVFRAME_BUTTON_INDEX].height = 8;
+    iface_buttons[PREVFRAME_BUTTON_INDEX].pressed = false;
+    iface_buttons[PREVFRAME_BUTTON_INDEX].handler = prev_frame;
+
+    iface_buttons[NEXTFRAME_BUTTON_INDEX].text = next_text;
+    iface_buttons[NEXTFRAME_BUTTON_INDEX].top = 112;
+    iface_buttons[NEXTFRAME_BUTTON_INDEX].left = 20;
+    iface_buttons[NEXTFRAME_BUTTON_INDEX].width = 8;
+    iface_buttons[NEXTFRAME_BUTTON_INDEX].height = 8;
+    iface_buttons[NEXTFRAME_BUTTON_INDEX].pressed = false;
+    iface_buttons[NEXTFRAME_BUTTON_INDEX].handler = next_frame;
+
+    iface_buttons[COPY_BUTTON_INDEX].text = "COPY";
+    iface_buttons[COPY_BUTTON_INDEX].top = 176;
+    iface_buttons[COPY_BUTTON_INDEX].left = 128;
+    iface_buttons[COPY_BUTTON_INDEX].width = 32;
+    iface_buttons[COPY_BUTTON_INDEX].height = 8;
+    iface_buttons[COPY_BUTTON_INDEX].pressed = false;
+    iface_buttons[COPY_BUTTON_INDEX].handler = copy_frame;
+
+    iface_buttons[PASTE_BUTTON_INDEX].text = "PASTE";
+    iface_buttons[PASTE_BUTTON_INDEX].top = 176;
+    iface_buttons[PASTE_BUTTON_INDEX].left = 176;
+    iface_buttons[PASTE_BUTTON_INDEX].width = 40;
+    iface_buttons[PASTE_BUTTON_INDEX].height = 8;
+    iface_buttons[PASTE_BUTTON_INDEX].pressed = false;
+    iface_buttons[PASTE_BUTTON_INDEX].handler = paste_frame;
 
     /*overlay_buffer = malloc(64000L);*/
 
@@ -282,18 +442,22 @@ void main(int argc, char** argv) {
         draw_text(graphic_buffer, current_file, 128,4);
     } else {
         draw_text(graphic_buffer, "UNTITLED", 128,4);
+        art_frames[0] = malloc(sizeof(byte) * frame_width * frame_height);
+        memset(art_frames[0], 0, sizeof(byte) * frame_width * frame_height);
     }
 
     for(i = 0; i < BUTTON_COUNT; i++) {
         draw_button(graphic_buffer, iface_buttons[i]);
     }
 
-    
+    show_frame(0);
+    sprintf(frames_text, "%d/%d", current_frame+1, frame_count);
 
     while(!(keystates & QUIT_KEY)) {
-        int boxX, boxY, miniX, miniY;
+        int frameX, frameY, boxX, boxY, miniX, miniY;
         cursor_pos(&cursorX, &cursorY, &buttons);
-        cursorX = cursorX >> 1;
+        frameX = ((cursorX - 128) >> 1);
+        frameY = ((cursorY - 16) >> 1);
         boxX = ((cursorX - 128)  & ~1) + 128;
         boxY = ((cursorY - 16) & ~1) + 16;
         miniX = ((cursorX - 128) >> 1);
@@ -304,25 +468,16 @@ void main(int argc, char** argv) {
             if(point_in_palette_area(cursorX, cursorY)) {
                 current_color = pixel(cursorX, cursorY);
             } else if(point_in_draw_area(cursorX, cursorY)) {
+                (art_frames[current_frame])[((frame_height - frameY - 1) * frame_width) + frameX] = current_color;
+                /*show_frame(current_frame);*/
                 /*pixel(cursorX, cursorY) = current_color;*/
                 pixel(miniX, miniY) = current_color;
                 rect(graphic_buffer, boxX, boxY, 2, 2, current_color);
                 
             } else if(!(prev_buttons & 1)) {
-                if(point_on_button(iface_buttons[SAVE_BUTTON_INDEX], cursorX, cursorY)) {
-                    if(current_file) {
-                        save_art(current_file);
-                        printf("SAVED\r");
-                    } else {
-                        show_buffer();
-                        draw_text(VGA, "TYPE FILENAME", 4, 84);
-                        current_file = malloc(32);
-                        deinit_keyboard();
-                        scanf("%16s", current_file);
-                        init_keyboard();
-                        save_art(current_file);
-                        rect(graphic_buffer, 128, 4, 192, 8, 26);
-                        draw_text(graphic_buffer, current_file, 128,4);
+                for(i = 0; i < BUTTON_COUNT; i++) {
+                    if(point_on_button(iface_buttons[i], cursorX, cursorY)) {
+                        iface_buttons[i].handler();
                     }
                 }
             }
@@ -331,13 +486,18 @@ void main(int argc, char** argv) {
         }
 
         if(point_in_draw_area(cursorX, cursorY)) {
-            sprintf(coords_text, "%d,%d", miniX, miniY - 136);
+            sprintf(coords_text, "%d,%d", cursorX, cursorY);
         }
+
+        if(keystates & 2) {
+            prev_frame();
+        } else if(keystates & 4) {
+            next_frame();
+        }
+
 
         rect(graphic_buffer, 0, 64, 32, 16, pixel(cursorX, cursorY));
         rect(graphic_buffer, 32, 64, 32, 16, current_color);
-
-
         rect(VGA, cursorX - 2, cursorY, 5, 1, 15);
         rect(VGA, cursorX, cursorY - 2, 1, 5, 15);
         overpixel(cursorX, cursorY) = pixel(cursorX, cursorY);
@@ -345,6 +505,7 @@ void main(int argc, char** argv) {
         wait_retrace();
         show_buffer();
         draw_text(VGA, coords_text, 128, 152);
+        draw_text(VGA, frames_text, 4, 124);
         /*printf("%d,%d\r", (cursorX - 128) >> 1, (cursorY - 16) >> 1);*/
         keystates = update_keystates(keystates, keymap, 8);
         prev_buttons = buttons;
