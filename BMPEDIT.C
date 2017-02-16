@@ -326,10 +326,6 @@ void main(int argc, char** argv) {
     int keystates = 0;
     unsigned i, k;
     int cursorX = 0, cursorY = 0, buttons = 0, prev_buttons = 0;
-    char* save_text = "SAVE";
-    char* chframes_text = "SET FRAMES";
-    char* next_text = "+";
-    char* prev_text = "-";
     
     byte current_color = 14;
     interface_button iface_buttons[BUTTON_COUNT];
@@ -352,7 +348,7 @@ void main(int argc, char** argv) {
         art_frames[i] = NULL;
     }
 
-    iface_buttons[SAVE_BUTTON_INDEX].text = save_text;
+    iface_buttons[SAVE_BUTTON_INDEX].text = "SAVE";
     iface_buttons[SAVE_BUTTON_INDEX].top = 32;
     iface_buttons[SAVE_BUTTON_INDEX].left = 264;
     iface_buttons[SAVE_BUTTON_INDEX].width = 32;
@@ -360,7 +356,7 @@ void main(int argc, char** argv) {
     iface_buttons[SAVE_BUTTON_INDEX].pressed = false;
     iface_buttons[SAVE_BUTTON_INDEX].handler = save_pressed;
 
-    iface_buttons[CHFRAME_BUTTON_INDEX].text = chframes_text;
+    iface_buttons[CHFRAME_BUTTON_INDEX].text = "SET FRAMES";
     iface_buttons[CHFRAME_BUTTON_INDEX].top = 100;
     iface_buttons[CHFRAME_BUTTON_INDEX].left = 4;
     iface_buttons[CHFRAME_BUTTON_INDEX].width = 80;
@@ -368,7 +364,7 @@ void main(int argc, char** argv) {
     iface_buttons[CHFRAME_BUTTON_INDEX].pressed = false;
     iface_buttons[CHFRAME_BUTTON_INDEX].handler = ch_frame;
 
-    iface_buttons[PREVFRAME_BUTTON_INDEX].text = prev_text;
+    iface_buttons[PREVFRAME_BUTTON_INDEX].text = "-";
     iface_buttons[PREVFRAME_BUTTON_INDEX].top = 112;
     iface_buttons[PREVFRAME_BUTTON_INDEX].left = 4;
     iface_buttons[PREVFRAME_BUTTON_INDEX].width = 8;
@@ -376,7 +372,7 @@ void main(int argc, char** argv) {
     iface_buttons[PREVFRAME_BUTTON_INDEX].pressed = false;
     iface_buttons[PREVFRAME_BUTTON_INDEX].handler = prev_frame;
 
-    iface_buttons[NEXTFRAME_BUTTON_INDEX].text = next_text;
+    iface_buttons[NEXTFRAME_BUTTON_INDEX].text = "+";
     iface_buttons[NEXTFRAME_BUTTON_INDEX].top = 112;
     iface_buttons[NEXTFRAME_BUTTON_INDEX].left = 20;
     iface_buttons[NEXTFRAME_BUTTON_INDEX].width = 8;
