@@ -8,11 +8,12 @@
 #include "mouse.h"
 
 #define timesWidth(x) ((x<<8)+(x<<6))
+#define sgn(x) (x>0)?1:-(x<0)
 
 #define overpixel(x,y) VGA[(y<<8)+(y<<6)+x]
 #define QUIT_KEY 1
 
-#define BUTTON_COUNT 8
+#define BUTTON_COUNT 9
 #define SAVE_BUTTON_INDEX 0
 #define CHFRAME_BUTTON_INDEX 1
 #define NEXTFRAME_BUTTON_INDEX 2
@@ -21,6 +22,7 @@
 #define PASTE_BUTTON_INDEX 5
 #define PENCIL_BUTTON_INDEX 6
 #define FILL_BUTTON_INDEX 7
+#define LINE_BUTTON_INDEX 8
 #define true 1
 #define false 0
 
@@ -30,6 +32,8 @@
 
 #define MODE_PENCIL 0
 #define MODE_FILL 1
+#define MODE_LINE_START 2
+#define MODE_LINE_END 3
 
 typedef int bool;
 
@@ -58,6 +62,8 @@ typedef struct coords {
 int fill_queue_head = 0, fill_queue_tail = 0;
 coords fill_queue[FILL_QUEUE_SIZE];
 
+coords line_start;
+
 byte *font;
 byte* copybuf;
 int frame_count = 1;
@@ -85,6 +91,50 @@ void rect(byte* target, int x, int y, int width, int height, byte color) {
     for(i = 0; i < height; i++) {
         memset(target + addr, color, width);
         addr += 320;
+    }
+}
+
+void draw_line_screen(byte* target, int ax, int ay, int bx, int by, byte color) {
+    int dx = bx - ax,
+        dy = by - ay,
+        absx = abs(dx),
+        absy = abs(dy),
+        sx = sgn(dx),
+        sy = sgn(dy),
+        stx = absx >> 1,
+        sty = absy >> 1,
+        i, px = ax, py = ay;
+
+    int *dmajor, *smajor, *sminor, *stminor, *absmajor, *absminor, *pmajor, *pminor;
+
+    if(abs(dx) > abs(dy)) {
+        dmajor = &dx;
+        smajor = &sx;
+        sminor = &sy;
+        stminor = &sty;
+        absmajor = &absx;
+        absminor = &absy;   
+        pmajor = &px;
+        pminor = &py;   
+    } else {
+        dmajor = &dy;
+        smajor = &sy;
+        sminor = &sx;
+        stminor = &stx;
+        absmajor = &absy;
+        absminor = &absx;   
+        pmajor = &py;
+        pminor = &px;
+    }
+
+    for(i = 0; i <= abs(*dmajor); i ++) {
+        *stminor += *absminor;
+        if(*stminor >= *absmajor) {
+            *stminor -= *absmajor;
+            *pminor += *sminor;
+        }
+        *pmajor += *smajor;
+        bufpixel(target,px, py) = color;
     }
 }
 
@@ -323,6 +373,18 @@ void select_fill() {
     tool_mode = MODE_FILL;
 }
 
+void select_line_start() {
+    if(tool_mode != MODE_LINE_END) {
+        tool_mode = MODE_LINE_START;
+    }
+}
+
+void mark_line_start(int x, int y) {
+    line_start.x = x;
+    line_start.y = y;
+    tool_mode = MODE_LINE_END;
+}
+
 void reset_fill_queue() {
     fill_queue_head = 0;
     fill_queue_tail = 0;
@@ -345,6 +407,10 @@ bool coords_in_frame(coords v) {
     if(v.x < 0 || v.x >= frame_width) return false;
     if(v.y < 0 || v.y >= frame_height) return false;
     return true;
+}
+
+byte* pointer_for_xy(int x, int y) {
+    return &((art_frames[current_frame])[((frame_height - y - 1) * frame_width) + x]);
 }
 
 byte* pointer_for_coords(coords v) {
@@ -403,6 +469,50 @@ void flood_fill(int x, int y, byte old_color, byte new_color) {
             enqueue_fill(S);
             *(pointer_for_coords(S)) = new_color;
         }
+    }
+}
+
+void draw_line_artbuf(int ax, int ay, int bx, int by, byte color) {
+    int dx = bx - ax,
+        dy = by - ay,
+        absx = abs(dx),
+        absy = abs(dy),
+        sx = sgn(dx),
+        sy = sgn(dy),
+        stx = absx >> 1,
+        sty = absy >> 1,
+        i, px = ax, py = ay;
+
+    int *dmajor, *smajor, *sminor, *stminor, *absmajor, *absminor, *pmajor, *pminor;
+
+    if(abs(dx) > abs(dy)) {
+        dmajor = &dx;
+        smajor = &sx;
+        sminor = &sy;
+        stminor = &sty;
+        absmajor = &absx;
+        absminor = &absy;   
+        pmajor = &px;
+        pminor = &py;   
+    } else {
+        dmajor = &dy;
+        smajor = &sy;
+        sminor = &sx;
+        stminor = &stx;
+        absmajor = &absy;
+        absminor = &absx;   
+        pmajor = &py;
+        pminor = &px;
+    }
+
+    for(i = 0; i <= abs(*dmajor); i ++) {
+        *stminor += *absminor;
+        if(*stminor >= *absmajor) {
+            *stminor -= *absmajor;
+            *pminor += *sminor;
+        }
+        *pmajor += *smajor;
+        *(pointer_for_xy(px, py)) = color;
     }
 }
 
@@ -480,7 +590,7 @@ void main(int argc, char** argv) {
     iface_buttons[PASTE_BUTTON_INDEX].handler = paste_frame;
 
     iface_buttons[PENCIL_BUTTON_INDEX].text = "PENCIL";
-    iface_buttons[PENCIL_BUTTON_INDEX].top = 176;
+    iface_buttons[PENCIL_BUTTON_INDEX].top = 160;
     iface_buttons[PENCIL_BUTTON_INDEX].left = 224;
     iface_buttons[PENCIL_BUTTON_INDEX].width = 48;
     iface_buttons[PENCIL_BUTTON_INDEX].height = 8;
@@ -488,14 +598,20 @@ void main(int argc, char** argv) {
     iface_buttons[PENCIL_BUTTON_INDEX].handler = select_pencil;
 
     iface_buttons[FILL_BUTTON_INDEX].text = "FILL";
-    iface_buttons[FILL_BUTTON_INDEX].top = 188;
+    iface_buttons[FILL_BUTTON_INDEX].top = 172;
     iface_buttons[FILL_BUTTON_INDEX].left = 224;
     iface_buttons[FILL_BUTTON_INDEX].width = 32;
     iface_buttons[FILL_BUTTON_INDEX].height = 8;
     iface_buttons[FILL_BUTTON_INDEX].pressed = false;
     iface_buttons[FILL_BUTTON_INDEX].handler = select_fill;
 
-
+    iface_buttons[LINE_BUTTON_INDEX].text = "LINE";
+    iface_buttons[LINE_BUTTON_INDEX].top = 184;
+    iface_buttons[LINE_BUTTON_INDEX].left = 224;
+    iface_buttons[LINE_BUTTON_INDEX].width = 32;
+    iface_buttons[LINE_BUTTON_INDEX].height = 8;
+    iface_buttons[LINE_BUTTON_INDEX].pressed = false;
+    iface_buttons[LINE_BUTTON_INDEX].handler = select_line_start;
 
     /*overlay_buffer = malloc(64000L);*/
 
@@ -575,6 +691,12 @@ void main(int argc, char** argv) {
                     byte old_color = (art_frames[current_frame])[((frame_height - frameY - 1) * frame_width) + frameX];
                     flood_fill(frameX, frameY, old_color, current_color);
                     show_frame(current_frame);
+                } else if((tool_mode == MODE_LINE_START) && (!(prev_buttons & 1))) {
+                    mark_line_start(frameX, frameY);
+                } else if((tool_mode == MODE_LINE_END) && (!(prev_buttons & 1))) {
+                    draw_line_artbuf(line_start.x, line_start.y, frameX, frameY, current_color);
+                    show_frame(current_frame);
+                    tool_mode = MODE_LINE_START;
                 }
                 
             } else if(!(prev_buttons & 1)) {
@@ -584,8 +706,12 @@ void main(int argc, char** argv) {
                     }
                 }
             }
-        } else if(buttons & 2) {
-            current_color = pixel(cursorX, cursorY);
+        } else if((buttons & 2) && !(prev_buttons & 2)) {
+            if(tool_mode == MODE_LINE_END) {
+                tool_mode == MODE_LINE_START;
+            } else {
+                current_color = pixel(cursorX, cursorY);
+            }
         }
 
         if(point_in_draw_area(cursorX, cursorY)) {
@@ -598,15 +724,22 @@ void main(int argc, char** argv) {
             next_frame();
         }
 
+        wait_retrace();
+        show_buffer();
 
         rect(graphic_buffer, 0, 64, 32, 16, pixel(cursorX, cursorY));
         rect(graphic_buffer, 32, 64, 32, 16, current_color);
-        rect(VGA, cursorX - 2, cursorY, 5, 1, 15);
-        rect(VGA, cursorX, cursorY - 2, 1, 5, 15);
-        overpixel(cursorX, cursorY) = pixel(cursorX, cursorY);
 
-        wait_retrace();
-        show_buffer();
+        /* draw cursor */
+        if(tool_mode == MODE_LINE_END && point_in_draw_area(cursorX, cursorY)) {
+            draw_line_screen(VGA, (line_start.x << 1) + 128, (line_start.y << 1) + 16, cursorX, cursorY, current_color);
+        } else {
+            
+            rect(VGA, cursorX - 2, cursorY, 5, 1, 15);
+            rect(VGA, cursorX, cursorY - 2, 1, 5, 15);
+            overpixel(cursorX, cursorY) = pixel(cursorX, cursorY);   
+        }
+        
         draw_text(VGA, coords_text, 128, 152);
         draw_text(VGA, frames_text, 4, 124);
         /*printf("%d,%d\r", (cursorX - 128) >> 1, (cursorY - 16) >> 1);*/
