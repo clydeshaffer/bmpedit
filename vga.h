@@ -13,6 +13,7 @@
 #define SCREEN_HEIGHT 200
 #define NUM_COLORS 256
 
+#define timesWidth(x) ((x<<8)+(x<<6))
 #define pixel(x,y) graphic_buffer[(y<<8)+(y<<6)+x]
 #define bufpixel(buf,x,y) buf[(y<<8)+(y<<6)+x]
 

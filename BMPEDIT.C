@@ -2,13 +2,12 @@
 #include <stdlib.h>
 #include <dos.h>
 
+#include "misc.h"
 #include "bmp.h"
 #include "vga.h"
+#include "gui.h"
 #include "keyb.h"
 #include "mouse.h"
-
-#define timesWidth(x) ((x<<8)+(x<<6))
-#define sgn(x) (x>0)?1:-(x<0)
 
 #define overpixel(x,y) VGA[(y<<8)+(y<<6)+x]
 #define QUIT_KEY 1
@@ -23,8 +22,6 @@
 #define PENCIL_BUTTON_INDEX 6
 #define FILL_BUTTON_INDEX 7
 #define LINE_BUTTON_INDEX 8
-#define true 1
-#define false 0
 
 #define MAX_FRAMES 64
 
@@ -35,7 +32,6 @@
 #define MODE_LINE_START 2
 #define MODE_LINE_END 3
 
-typedef int bool;
 
 int tool_mode = 0;
 
@@ -44,14 +40,6 @@ int frame_height = 64;
 
 char coords_text[16];
 char frames_text[16];
-
-typedef struct interface_button
-{
-    char* text;
-    int top, left, width, height;
-    bool pressed;
-    void (*handler) ();
-} interface_button;
 
 /*byte *overlay_buffer;*/
 
@@ -64,35 +52,11 @@ coords fill_queue[FILL_QUEUE_SIZE];
 
 coords line_start;
 
-byte *font;
 byte* copybuf;
 int frame_count = 1;
 int current_frame = 0;
 byte** art_frames;
 char* current_file = NULL;
-
-void rect(byte* target, int x, int y, int width, int height, byte color) {
-    int i, addr;
-    if(x < 0) {
-        width += x;
-        x = 0;
-        if(width <= 0) return;
-    }
-    if(y < 0) {
-        height += y;
-        y = 0;
-        if(height <= 0) return;
-    }
-    addr = timesWidth(y) + x;
-    if(x >= 320) x = 319;
-    if(y >= 200) y = 199;
-    if(x + width > 320) width = 320 - x;
-    if(y + height > 200) height = 200 - y;
-    for(i = 0; i < height; i++) {
-        memset(target + addr, color, width);
-        addr += 320;
-    }
-}
 
 void draw_line_screen(byte* target, int ax, int ay, int bx, int by, byte color) {
     int dx = bx - ax,
@@ -155,69 +119,6 @@ void memcpy_skip_zeroes(char* dest, char* origin, size_t count) {
     }
 }
 
-void load_font(char* filename) {
-    bmp_head header;
-    palette_color palette_table[256];
-    font = load_bmp(&header, palette_table, filename);
-}
-
-void draw_char(byte* target, char c, int x, int y) {
-    int i = 0;
-    int cx, cy;
-    if(c < 65 || c > 90) {
-        if(c >= 97 && c <= 122) {
-            c -= 97;
-        }
-        else if((c < 48) || (c > 57)) {
-            if((c < 42) || (c > 47)) {
-                return;
-            } else {
-                c += 16;
-            }
-        }
-    } else {
-        c -= 65;
-    }
-    
-
-    cx = (c & 7) << 3;
-    cy = c & 248;
-    cy = 63 - cy;
-
-    target += x + timesWidth(y);
-
-    for(i = 0; i < 8; i++) {
-        memcpy_skip_zeroes(target, font + cx + (cy * 64), 8);
-        cy --;
-        target += 320;
-    }
-}
-
-void draw_text(byte* target, char* str, int x, int y) {
-    while(*str != 0) {
-        draw_char(target,*str, x, y);
-        x += 8;
-        str++;
-    }
-}
-
-void draw_button(byte* target, interface_button b) {
-
-    rect(target, b.left+2, b.top+2, b.width, b.height, 22);
-    rect(target, b.left+1, b.top+1, b.width, b.height, 24);
-
-    rect(target, b.left-2, b.top - 2, b.width, b.height, 30);
-    rect(target, b.left-1, b.top - 1, b.width, b.height, 28);
-
-    rect(target, b.left, b.top, b.width, b.height, 26);
-
-    draw_text(target, b.text, b.left, b.top);
-}
-
-bool point_on_button(interface_button b, int x, int y) {
-    return (x >= b.left) && (x < (b.left + b.width)) && (y >= b.top) && (y < (b.top + b.height));
-}
-
 void load_art(char* filename) {
     bmp_head header;
     palette_color palette_table[256];
@@ -233,14 +134,6 @@ void load_art(char* filename) {
     for(i = 0; i < frame_count; i++) {
         art_frames[i] = artbuf + (sizeof(byte) * frame_width * frame_height * i);
     }
-
-    /*for(i = 0; i < 64; i++) {
-        memcpy(graphic_buffer + (320 * (i + 136)), artbuf+((63 - i)*64), 64);
-    }
-
-    for(i = 0; i < 4096; i++) {
-        rect(graphic_buffer, ((i % 64) << 1) + 128, (126 - ((i / 64) << 1)) + 16, 2, 2, artbuf[i]);
-    }*/
 }
 
 void save_art(char* filename) {
@@ -541,77 +434,15 @@ void main(int argc, char** argv) {
         art_frames[i] = NULL;
     }
 
-    iface_buttons[SAVE_BUTTON_INDEX].text = "SAVE";
-    iface_buttons[SAVE_BUTTON_INDEX].top = 32;
-    iface_buttons[SAVE_BUTTON_INDEX].left = 264;
-    iface_buttons[SAVE_BUTTON_INDEX].width = 32;
-    iface_buttons[SAVE_BUTTON_INDEX].height = 8;
-    iface_buttons[SAVE_BUTTON_INDEX].pressed = false;
-    iface_buttons[SAVE_BUTTON_INDEX].handler = save_pressed;
-
-    iface_buttons[CHFRAME_BUTTON_INDEX].text = "SET FRAMES";
-    iface_buttons[CHFRAME_BUTTON_INDEX].top = 100;
-    iface_buttons[CHFRAME_BUTTON_INDEX].left = 4;
-    iface_buttons[CHFRAME_BUTTON_INDEX].width = 80;
-    iface_buttons[CHFRAME_BUTTON_INDEX].height = 8;
-    iface_buttons[CHFRAME_BUTTON_INDEX].pressed = false;
-    iface_buttons[CHFRAME_BUTTON_INDEX].handler = ch_frame;
-
-    iface_buttons[PREVFRAME_BUTTON_INDEX].text = "-";
-    iface_buttons[PREVFRAME_BUTTON_INDEX].top = 112;
-    iface_buttons[PREVFRAME_BUTTON_INDEX].left = 4;
-    iface_buttons[PREVFRAME_BUTTON_INDEX].width = 8;
-    iface_buttons[PREVFRAME_BUTTON_INDEX].height = 8;
-    iface_buttons[PREVFRAME_BUTTON_INDEX].pressed = false;
-    iface_buttons[PREVFRAME_BUTTON_INDEX].handler = prev_frame;
-
-    iface_buttons[NEXTFRAME_BUTTON_INDEX].text = "+";
-    iface_buttons[NEXTFRAME_BUTTON_INDEX].top = 112;
-    iface_buttons[NEXTFRAME_BUTTON_INDEX].left = 20;
-    iface_buttons[NEXTFRAME_BUTTON_INDEX].width = 8;
-    iface_buttons[NEXTFRAME_BUTTON_INDEX].height = 8;
-    iface_buttons[NEXTFRAME_BUTTON_INDEX].pressed = false;
-    iface_buttons[NEXTFRAME_BUTTON_INDEX].handler = next_frame;
-
-    iface_buttons[COPY_BUTTON_INDEX].text = "COPY";
-    iface_buttons[COPY_BUTTON_INDEX].top = 176;
-    iface_buttons[COPY_BUTTON_INDEX].left = 128;
-    iface_buttons[COPY_BUTTON_INDEX].width = 32;
-    iface_buttons[COPY_BUTTON_INDEX].height = 8;
-    iface_buttons[COPY_BUTTON_INDEX].pressed = false;
-    iface_buttons[COPY_BUTTON_INDEX].handler = copy_frame;
-
-    iface_buttons[PASTE_BUTTON_INDEX].text = "PASTE";
-    iface_buttons[PASTE_BUTTON_INDEX].top = 188;
-    iface_buttons[PASTE_BUTTON_INDEX].left = 128;
-    iface_buttons[PASTE_BUTTON_INDEX].width = 40;
-    iface_buttons[PASTE_BUTTON_INDEX].height = 8;
-    iface_buttons[PASTE_BUTTON_INDEX].pressed = false;
-    iface_buttons[PASTE_BUTTON_INDEX].handler = paste_frame;
-
-    iface_buttons[PENCIL_BUTTON_INDEX].text = "PENCIL";
-    iface_buttons[PENCIL_BUTTON_INDEX].top = 160;
-    iface_buttons[PENCIL_BUTTON_INDEX].left = 224;
-    iface_buttons[PENCIL_BUTTON_INDEX].width = 48;
-    iface_buttons[PENCIL_BUTTON_INDEX].height = 8;
-    iface_buttons[PENCIL_BUTTON_INDEX].pressed = false;
-    iface_buttons[PENCIL_BUTTON_INDEX].handler = select_pencil;
-
-    iface_buttons[FILL_BUTTON_INDEX].text = "FILL";
-    iface_buttons[FILL_BUTTON_INDEX].top = 172;
-    iface_buttons[FILL_BUTTON_INDEX].left = 224;
-    iface_buttons[FILL_BUTTON_INDEX].width = 32;
-    iface_buttons[FILL_BUTTON_INDEX].height = 8;
-    iface_buttons[FILL_BUTTON_INDEX].pressed = false;
-    iface_buttons[FILL_BUTTON_INDEX].handler = select_fill;
-
-    iface_buttons[LINE_BUTTON_INDEX].text = "LINE";
-    iface_buttons[LINE_BUTTON_INDEX].top = 184;
-    iface_buttons[LINE_BUTTON_INDEX].left = 224;
-    iface_buttons[LINE_BUTTON_INDEX].width = 32;
-    iface_buttons[LINE_BUTTON_INDEX].height = 8;
-    iface_buttons[LINE_BUTTON_INDEX].pressed = false;
-    iface_buttons[LINE_BUTTON_INDEX].handler = select_line_start;
+    iface_buttons[SAVE_BUTTON_INDEX] = make_button("SAVE", 264, 32, 32, 8, save_pressed);
+    iface_buttons[CHFRAME_BUTTON_INDEX] = make_button("SET FRAMES", 4, 100, 80, 8, ch_frame);
+    iface_buttons[PREVFRAME_BUTTON_INDEX] = make_button("-", 4, 112, 8, 8, prev_frame);
+    iface_buttons[NEXTFRAME_BUTTON_INDEX] = make_button("+", 20, 112, 8, 8, next_frame);
+    iface_buttons[COPY_BUTTON_INDEX] = make_button("COPY", 128, 176, 32, 8, copy_frame);
+    iface_buttons[PASTE_BUTTON_INDEX] = make_button("PASTE", 128, 188, 40, 8, paste_frame);
+    iface_buttons[PENCIL_BUTTON_INDEX] = make_button("PENCIL", 224, 160, 48, 8, select_pencil);
+    iface_buttons[FILL_BUTTON_INDEX] = make_button("FILL", 224, 172, 32, 8, select_fill);
+    iface_buttons[LINE_BUTTON_INDEX] = make_button("LINE", 224, 184, 32, 8, select_line_start);
 
     /*overlay_buffer = malloc(64000L);*/
 
@@ -629,11 +460,13 @@ void main(int argc, char** argv) {
 
     rect(graphic_buffer, 0, 0, 320, 200, 26);
 
-    rect(graphic_buffer, 130, 18, 128, 128, 28);
+    bevel_box(graphic_buffer, 128, 16, 128, 128, false);
+
+    /*rect(graphic_buffer, 130, 18, 128, 128, 28);
     rect(graphic_buffer, 129, 17, 128, 128, 30);
 
     rect(graphic_buffer, 126, 14, 128, 128, 24);
-    rect(graphic_buffer, 127, 15, 128, 128, 22);
+    rect(graphic_buffer, 127, 15, 128, 128, 22);*/
 
     for(i = 0; i < 256; i++) {
         int x = (i % 16) << 2;
@@ -752,7 +585,6 @@ void main(int argc, char** argv) {
 
     set_mode(VGA_TEXT_MODE);
     deinit_keyboard();
-    free(font);
     /*free(overlay_buffer);*/
     printf("Thanks for using BMPEDIT! -Clyde");
     return;
